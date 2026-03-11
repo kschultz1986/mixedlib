@@ -67,18 +67,22 @@ function refreshFromRustSource(workspaceRoot: string): void {
 
   // Persist to .maturing/_rust_locations.json at the workspace root so the
   // map survives VS Code restarts and is inspectable by developers.
+  // Only write if the project has already been initialized (i.e. the
+  // .maturing directory exists).  Use the "Maturing: Initialize Project"
+  // command to opt a workspace into this feature.
   const maturingDir = path.join(workspaceRoot, ".maturing");
   const jsonPath = path.join(maturingDir, "_rust_locations.json");
-  try {
-    if (!fs.existsSync(maturingDir)) fs.mkdirSync(maturingDir);
-    // Write only the entries that belong to this workspace root.
-    const forRoot: Record<string, { file: string; line: number }> = {};
-    for (const [name, loc] of Object.entries(found)) {
-      forRoot[name] = loc; // absolute paths kept as-is for readability
+  if (fs.existsSync(maturingDir)) {
+    try {
+      // Write only the entries that belong to this workspace root.
+      const forRoot: Record<string, { file: string; line: number }> = {};
+      for (const [name, loc] of Object.entries(found)) {
+        forRoot[name] = loc; // absolute paths kept as-is for readability
+      }
+      fs.writeFileSync(jsonPath, JSON.stringify(forRoot, null, 2) + "\n");
+    } catch {
+      // .maturing/ may not be writable in some environments — non-fatal.
     }
-    fs.writeFileSync(jsonPath, JSON.stringify(forRoot, null, 2) + "\n");
-  } catch {
-    // .maturing/ may not be writable in some environments — non-fatal.
   }
 }
 
@@ -87,10 +91,14 @@ function refreshFromRustSource(workspaceRoot: string): void {
 // ---------------------------------------------------------------------------
 
 export function activate(context: vscode.ExtensionContext): void {
-  // Eagerly parse every workspace folder so the map is ready before the first
-  // Go To Definition is triggered.
+  // Eagerly parse workspace folders that have already been initialized
+  // (i.e. the .maturing directory exists).  Uninitialized folders are left
+  // alone until the user runs "Maturing: Initialize Project".
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    refreshFromRustSource(folder.uri.fsPath);
+    const maturingDir = path.join(folder.uri.fsPath, ".maturing");
+    if (fs.existsSync(maturingDir)) {
+      refreshFromRustSource(folder.uri.fsPath);
+    }
   }
 
   // Watch all .rs files in the workspace.  Filter out build artefacts
@@ -169,6 +177,45 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(override);
+
+  // "Maturing: Initialize Project" — creates the .maturing directory in every
+  // workspace folder and performs the initial Rust scan.  Running this command
+  // is the explicit opt-in that enables the extension's features for a project.
+  const initCmd = vscode.commands.registerCommand(
+    "maturing.initializeProject",
+    async () => {
+      const folders = vscode.workspace.workspaceFolders;
+      if (!folders || folders.length === 0) {
+        vscode.window.showWarningMessage(
+          "Maturing: No workspace folder is open. Please open a folder first."
+        );
+        return;
+      }
+
+      for (const folder of folders) {
+        const maturingDir = path.join(folder.uri.fsPath, ".maturing");
+        try {
+          if (!fs.existsSync(maturingDir)) {
+            fs.mkdirSync(maturingDir);
+          }
+          refreshFromRustSource(folder.uri.fsPath);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`Maturing: Failed to initialize project at ${folder.uri.fsPath}: ${message}`);
+          vscode.window.showErrorMessage(
+            `Maturing: Failed to initialize project at ${folder.uri.fsPath}: ${message}`
+          );
+          return;
+        }
+      }
+
+      vscode.window.showInformationMessage(
+        "Maturing: Project initialized. Go To Definition is now active for PyO3 functions."
+      );
+    }
+  );
+
+  context.subscriptions.push(initCmd);
 }
 
 export function deactivate(): void {}
