@@ -8,7 +8,15 @@
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "maturing.initializeProject",
+        "title": "Initialize Project",
+        "category": "Maturing"
+      }
+    ]
+  },
   "scripts": {
     "compile": "tsc -p tsconfig.json",
     "package": "vsce package --allow-missing-repository"
